@@ -7,6 +7,10 @@ name = "iconverter"
 version = "1.0.0"
 description = "Icon & Vector Studio — Faithful Picture to .SVG and Complete 12-Slot Apple .ICNS Converter built with ModernTtk."
 readme = "README.md"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Andrew Thomas", email = "asteng88@users.noreply.github.com" },
+]
 requires-python = ">=3.11"
 dependencies = [
     "modernttk",
@@ -16,6 +20,13 @@ dependencies = [
     "resvg-py>=0.5.0",
     "vtracer>=1.0.0a4",
 ]
+
+[project.urls]
+Homepage = "https://github.com/asteng88/Iconverter"
+Repository = "https://github.com/asteng88/Iconverter"
+Releases = "https://github.com/asteng88/Iconverter/releases"
+Issues = "https://github.com/asteng88/Iconverter/issues"
+Changelog = "https://github.com/asteng88/Iconverter/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = [
