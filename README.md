@@ -5,7 +5,7 @@
 [![UI Toolkit](https://img.shields.io/badge/UI-ModernTtk-10b981?style=flat-square)](./ModernTtk)
 [![License: MIT](https://img.shields.io/badge/License-MIT-f59e0b?style=flat-square)](./LICENSE)
 
-**Iconverter (Icon & Vector Studio)** is a high-precision desktop studio and command-line converter that transforms raster illustrations, logos, and photographs into **faithful scalable vector graphics (`.svg`)** and **complete 12-slot Apple icon bundles (`.icns`)** (plus multi-size Windows `.ico`).
+**Iconverter (Icon & Vector Studio)** is a high-precision desktop studio and command-line converter that transforms raster illustrations, logos, and photographs into **faithful scalable vector graphics (`.svg`)** and **complete Apple and Windows icon bundles (`.icns`)** (plus multi-size Windows `.ico`).
 
 Built on a hybrid vector-and-gradient reconstruction pipeline (`vtracer` + `resvg_py` + OpenCV + Pillow) and powered by **[ModernTtk](./ModernTtk)**, Iconverter reconstructs true SVG `<linearGradient>`, off-center focal `<radialGradient>`, and curved 2D smooth-shaded vector regions while eliminating subpixel anti-aliasing halo noise and staircase artifacts.
 
