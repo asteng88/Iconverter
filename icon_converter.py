@@ -12,7 +12,7 @@ Headless CLI conversion:
 Build standalone Windows executable later with PyInstaller:
     uv run pyinstaller --noconfirm --onefile --windowed --name Iconverter ^
         --icon icons/Icon_generator.ico --add-data "icons;icons" ^
-        --paths ModernTtk --collect-all vtracer --collect-all resvg_py icon_converter.py
+        --paths ModernTtk --collect-all modernttk --collect-all vtracer --collect-all resvg_py icon_converter.py
 """
 
 from __future__ import annotations
@@ -160,22 +160,16 @@ from PIL import (
 
 
 def ensure_modernttk_on_path() -> Path:
-    """Ensure `modernttk` is importable from installed packages, PyInstaller bundle, or `P:\\ModernTtk`."""
-    try:
-        import modernttk  # noqa: F401
-        return Path(modernttk.__file__).resolve().parent
-    except ImportError:
-        pass
-
-    candidates: List[Path] = []
+    """Ensure `modernttk` is importable from the PyInstaller bundle, installed package, or local `./ModernTtk`."""
     meipass = getattr(sys, "_MEIPASS", None)
-    if meipass:
-        candidates.append(Path(meipass))
     here = Path(__file__).resolve().parent
+    candidates: List[Path] = []
+    if meipass:
+        candidates.extend([Path(meipass), Path(meipass) / "ModernTtk"])
     candidates.extend([
         here / "ModernTtk",
+        here,
         here.parent / "ModernTtk",
-        Path(r"P:\ModernTtk"),
     ])
     for cand in candidates:
         if (cand / "modernttk" / "__init__.py").is_file():
@@ -183,7 +177,12 @@ def ensure_modernttk_on_path() -> Path:
             if s not in sys.path:
                 sys.path.insert(0, s)
             return cand / "modernttk"
-    return Path()
+
+    try:
+        import modernttk  # noqa: F401
+        return Path(modernttk.__file__).resolve().parent
+    except ImportError:
+        return Path()
 
 
 ensure_modernttk_on_path()

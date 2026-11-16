@@ -171,7 +171,7 @@ To compile a single-file Windows executable with bundled `Icon_generator` icons 
 ```powershell
 uv run pyinstaller --clean --noconfirm --onefile --windowed --name Iconverter ^
     --icon icons/Icon_generator.ico --add-data "icons;icons" ^
-    --paths ModernTtk --collect-all vtracer --collect-all resvg_py icon_converter.py
+    --paths ModernTtk --collect-all modernttk --collect-all vtracer --collect-all resvg_py icon_converter.py
 ```
 
 The standalone executable is output to `dist\Iconverter.exe`.
