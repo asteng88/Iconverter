@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [1.0.3] - 2026-11-16
+
+### Added
+- **Rounded Corners & Custom Border Colour (`.SVG`, `.ICNS`, `.ICO`)**:
+  - Added **Rounded Corners (.SVG & Icons)** toggle and **Corner Radius (%)** slider (`2%`–`50%`) in **Framing & Background**.
+  - Added **Add Border Around Frame** toggle, **Border Width (%)** slider (`1%`–`15%`), and **Border Colour** swatch + native colour picker (`#RRGGBB`) for both vector `.svg` (`<clipPath>` + `<rect>` stroke) and 4× supersampled `.icns` / `.ico` masters.
+  - Added CLI flags `--rounded-corners`, `--corner-radius`, `--border`, `--border-width`, and `--border-color`.
+
+### Changed
+- **High-DPI Windows Taskbar & Window Branding**:
+  - Updated `save_ico()` to encode 9 descending High-DPI mipmap slots (`256, 128, 64, 48, 40, 32, 24, 20, 16`) with `256×256` first and a dedicated `40×40` Windows 11 125%-DPI taskbar slot.
+  - Updated `_apply_window_branding()` on Windows to bind native Win32 `HICON` handles (`SM_CXICON` / `SM_CXSMICON`) via `WM_SETICON` and `SetClassLongPtrW` using the updated `Icon_generator` icon with rounded corners and border.
+  - Bundled `ModernTtk` cleanly inside the standalone executable (`--collect-all modernttk`) with zero external path dependencies.
+
+---
+
 ## [1.0.1] - 2026-11-16
 
 ### Changed

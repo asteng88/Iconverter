@@ -1,6 +1,6 @@
 # Iconverter — Icon & Vector Studio
 
-[![Release](https://img.shields.io/badge/release-v1.0.1-4cc2ff?style=flat-square)](https://github.com/asteng88/Iconverter/releases/tag/v1.0.1)
+[![Release](https://img.shields.io/badge/release-v1.0.3-4cc2ff?style=flat-square)](https://github.com/asteng88/Iconverter/releases/tag/v1.0.3)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776ab?style=flat-square)](https://www.python.org/)
 [![UI Toolkit](https://img.shields.io/badge/UI-ModernTtk-10b981?style=flat-square)](./ModernTtk)
 [![License: MIT](https://img.shields.io/badge/License-MIT-f59e0b?style=flat-square)](./LICENSE)

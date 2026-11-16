@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "iconverter"
-version = "1.0.1"
+version = "1.0.3"
 description = "Icon & Vector Studio — Faithful Picture to .SVG and Complete 12-Slot Apple .ICNS Converter built with ModernTtk."
 readme = "README.md"
 license = { file = "LICENSE" }

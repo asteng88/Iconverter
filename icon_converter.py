@@ -142,7 +142,7 @@ if len(sys.argv) >= 2 and sys.argv[1] == "--native-svg-worker":
 
 
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import colorchooser, filedialog, messagebox
 
 import cv2
 import numpy as np
@@ -219,7 +219,7 @@ def _should_offload_native_gil() -> bool:
     return mtk.ModernSubprocessWorker.should_offload()
 
 
-__version__ = "1.0.1"
+__version__ = "1.0.3"
 GITHUB_OWNER = os.environ.get("ICONVERTER_GITHUB_OWNER", "asteng88")
 GITHUB_REPO = os.environ.get("ICONVERTER_GITHUB_REPO", "Iconverter")
 GITHUB_RELEASES_PAGE = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases"
@@ -438,6 +438,11 @@ class PrepareOptions:
     deepen_strength: float = 55.0
     picked_transparencies: Tuple[TransparencyPick, ...] = ()
     square_crop: Optional[Tuple[int, int, int, int]] = None
+    rounded_corners: bool = False
+    corner_radius_pct: float = 18.0
+    rounded_border: bool = False
+    border_width_pct: float = 3.0
+    border_color_rgb: Tuple[int, int, int] = (76, 194, 255)
 
 
 @dataclass
@@ -450,6 +455,12 @@ class PreparedMaster:
     has_transparency: bool
     source_size: Tuple[int, int]
     crop_box: Tuple[int, int, int, int] = (0, 0, 0, 0)
+    unframed_image: Optional[Image.Image] = None
+    rounded_corners: bool = False
+    corner_radius_pct: float = 0.0
+    rounded_border: bool = False
+    border_width_pct: float = 0.0
+    border_color_rgb: Tuple[int, int, int] = (76, 194, 255)
 
 
 @dataclass
@@ -1070,6 +1081,64 @@ def compute_square_crop_drag(
     return (ox0, oy0, ox1, oy1)
 
 
+def apply_rounded_corners_and_border(
+    im: Image.Image,
+    *,
+    rounded_corners: bool,
+    corner_radius_pct: float = 18.0,
+    rounded_border: bool = False,
+    border_width_pct: float = 3.0,
+    border_color_rgb: Tuple[int, int, int] = (76, 194, 255),
+) -> Image.Image:
+    """Apply smooth 4x-supersampled rounded corners and/or a custom-colored inward border."""
+    use_round = bool(rounded_corners and corner_radius_pct > 0.0)
+    use_border = bool(rounded_border and border_width_pct > 0.0)
+    if not use_round and not use_border:
+        return im.convert("RGBA")
+
+    rgba = im.convert("RGBA")
+    w, h = rgba.size
+    min_dim = float(min(w, h))
+    rad_pct = float(np.clip(corner_radius_pct, 0.0, 50.0)) if use_round else 0.0
+    bw_pct = float(np.clip(border_width_pct, 0.5, 25.0)) if use_border else 0.0
+
+    ss = 4
+    w4, h4 = w * ss, h * ss
+    r4 = int(round(min_dim * (rad_pct / 100.0) * ss))
+
+    outer_4x = Image.new("L", (w4, h4), 0)
+    d_outer = ImageDraw.Draw(outer_4x)
+    if r4 > 0:
+        d_outer.rounded_rectangle([0, 0, w4 - 1, h4 - 1], radius=r4, fill=255)
+    else:
+        d_outer.rectangle([0, 0, w4 - 1, h4 - 1], fill=255)
+    outer_mask = outer_4x.resize((w, h), Image.Resampling.LANCZOS)
+
+    out = rgba.copy()
+    if r4 > 0:
+        orig_a = out.getchannel("A")
+        out.putalpha(ImageChops.multiply(orig_a, outer_mask))
+
+    if use_border:
+        bw4 = max(ss, int(round(min_dim * (bw_pct / 100.0) * ss)))
+        inner_4x = Image.new("L", (w4, h4), 0)
+        if w4 - 2 * bw4 > 1 and h4 - 2 * bw4 > 1:
+            d_inner = ImageDraw.Draw(inner_4x)
+            r_in4 = max(0, r4 - bw4)
+            if r_in4 > 0:
+                d_inner.rounded_rectangle([bw4, bw4, w4 - 1 - bw4, h4 - 1 - bw4], radius=r_in4, fill=255)
+            else:
+                d_inner.rectangle([bw4, bw4, w4 - 1 - bw4, h4 - 1 - bw4], fill=255)
+        ring_4x = ImageChops.subtract(outer_4x, inner_4x)
+        ring_mask = ring_4x.resize((w, h), Image.Resampling.LANCZOS)
+        br, bg_c, bb = (int(np.clip(c, 0, 255)) for c in border_color_rgb[:3])
+        border_layer = Image.new("RGBA", (w, h), (br, bg_c, bb, 0))
+        border_layer.putalpha(ring_mask)
+        out = Image.alpha_composite(out, border_layer)
+
+    return out
+
+
 def prepare_master_image(source_rgba: Image.Image, opts: PrepareOptions) -> PreparedMaster:
     """Preprocess source artwork according to square crop, background mode, denoising, and trim options."""
     src = source_rgba.convert("RGBA")
@@ -1141,13 +1210,35 @@ def prepare_master_image(source_rgba: Image.Image, opts: PrepareOptions) -> Prep
     if eff_opts.bg_mode == "squircle":
         out_im = _apply_squircle_badge(out_im, border_rgb or (255, 255, 255))
 
+    unframed_im = out_im
+    use_round = bool(eff_opts.rounded_corners and eff_opts.corner_radius_pct > 0.0)
+    use_border = bool(eff_opts.rounded_border and eff_opts.border_width_pct > 0.0)
+    if use_round or use_border:
+        out_im = apply_rounded_corners_and_border(
+            unframed_im,
+            rounded_corners=use_round,
+            corner_radius_pct=eff_opts.corner_radius_pct,
+            rounded_border=use_border,
+            border_width_pct=eff_opts.border_width_pct,
+            border_color_rgb=eff_opts.border_color_rgb,
+        )
+
     has_transparency = bool(np.any(np.asarray(out_im.getchannel("A")) < 252))
     square_icon = make_square_icon_master(
-        out_im,
+        unframed_im if (use_round or use_border) else out_im,
         bg_mode=opts.bg_mode,
         border_rgb=border_rgb,
         min_size=1024,
     )
+    if use_round or use_border:
+        square_icon = apply_rounded_corners_and_border(
+            square_icon,
+            rounded_corners=use_round,
+            corner_radius_pct=eff_opts.corner_radius_pct,
+            rounded_border=use_border,
+            border_width_pct=eff_opts.border_width_pct,
+            border_color_rgb=eff_opts.border_color_rgb,
+        )
 
     return PreparedMaster(
         image=out_im,
@@ -1156,6 +1247,12 @@ def prepare_master_image(source_rgba: Image.Image, opts: PrepareOptions) -> Prep
         has_transparency=has_transparency,
         source_size=orig_size,
         crop_box=crop_box,
+        unframed_image=unframed_im,
+        rounded_corners=use_round,
+        corner_radius_pct=float(eff_opts.corner_radius_pct) if use_round else 0.0,
+        rounded_border=use_border,
+        border_width_pct=float(eff_opts.border_width_pct) if use_border else 0.0,
+        border_color_rgb=tuple(int(c) for c in eff_opts.border_color_rgb[:3]),
     )
 
 
@@ -1809,7 +1906,12 @@ def convert_image_to_svg(
     progress_cb: Optional[Callable[[float, str], None]] = None,
 ) -> str:
     """Convert a prepared RGBA master into a pure-vector scalable SVG string."""
-    img = prepared.image
+    use_round_vec = bool(prepared.rounded_corners or prepared.rounded_border)
+    img = (
+        prepared.unframed_image
+        if (use_round_vec and prepared.unframed_image is not None)
+        else prepared.image
+    )
     orig_w, orig_h = img.size
 
     def _prog(pct: float, msg: str) -> None:
@@ -1824,6 +1926,7 @@ def convert_image_to_svg(
     th = max(1, int(round(orig_h * scale)))
 
     src_arr = np.array(img, dtype=np.uint8)
+    unframed_has_trans = bool(np.any(src_arr[..., 3] < 252)) if use_round_vec else prepared.has_transparency
 
     # Work at segmentation resolution (<= 1024) for fast, crisp gradient & mask extraction
     if max(orig_w, orig_h) > 1024:
@@ -1843,7 +1946,7 @@ def convert_image_to_svg(
     _prog(18, "Analyzing SVG gradients & alpha masks...")
 
     # Extrapolate clean foreground RGB across faint/transparent rims so traces never acquire dark fringes
-    if prepared.has_transparency:
+    if unframed_has_trans:
         vis_core = seg_alpha >= 10
         if np.any(vis_core):
             seg_rgb_clean = np.clip(
@@ -1864,7 +1967,7 @@ def convert_image_to_svg(
     flatten_rgb_seg = np.zeros((seg_h, seg_w, 3), dtype=np.uint8)
 
     alpha_mask_xml: Optional[str] = None
-    if prepared.has_transparency:
+    if unframed_has_trans:
         alpha_mask_xml = _build_svg_alpha_mask_defs(
             seg_alpha, sx=sx, sy=sy, tw=tw, th=th, spline=(opts.mode != "pixel")
         )
@@ -1873,7 +1976,7 @@ def convert_image_to_svg(
 
     use_gradients = bool(opts.true_gradients and opts.mode != "pixel")
     if use_gradients:
-        if prepared.has_transparency:
+        if unframed_has_trans:
             vis_seg = (seg_alpha >= 12) if alpha_mask_xml is not None else (seg_alpha >= 245)
         else:
             vis_seg = np.ones((seg_h, seg_w), dtype=bool)
@@ -1881,7 +1984,7 @@ def convert_image_to_svg(
             seg_rgb_clean,
             vis_seg,
             seg_grad,
-            None if prepared.has_transparency else prepared.border_rgb,
+            None if unframed_has_trans else prepared.border_rgb,
             sx=sx,
             sy=sy,
             tw=tw,
@@ -1896,7 +1999,7 @@ def convert_image_to_svg(
     # Prepare clean 1x RGB source (extrapolated across alpha rims) then upscale & de-alias for tracing
     base_rgb_1x = src_arr[..., :3]
     src_alpha_1x = src_arr[..., 3]
-    if prepared.has_transparency:
+    if unframed_has_trans:
         vis_1x = src_alpha_1x >= 10
         if np.any(vis_1x):
             extrap_1x = _pull_push_extrapolate_rgb(base_rgb_1x.astype(np.float32), vis_1x, kernel_sizes=(5, 9))
@@ -1913,7 +2016,7 @@ def convert_image_to_svg(
     else:
         trace_alpha = src_alpha_1x.copy()
 
-    if prepared.has_transparency:
+    if unframed_has_trans:
         if alpha_mask_xml is not None:
             # Make visible rim slightly dilated & binary opaque so the pure-vector alpha mask fades cleanly
             vis_dil = cv2.dilate((trace_alpha >= 6).astype(np.uint8), np.ones((3, 3), np.uint8), iterations=1) > 0
@@ -1991,7 +2094,7 @@ def convert_image_to_svg(
         raw_svg = _fallback_opencv_svg(trace_img, opts)
 
     base_bg_hex: Optional[str] = None
-    if not prepared.has_transparency and prepared.border_rgb is not None:
+    if not unframed_has_trans and prepared.border_rgb is not None:
         r, g, b = prepared.border_rgb
         base_bg_hex = f"#{r:02X}{g:02X}{b:02X}"
 
@@ -2004,7 +2107,28 @@ def convert_image_to_svg(
         base_bg_hex=base_bg_hex,
     )
 
-    if grad_overlays or all_defs:
+    round_border_xml = ""
+    if use_round_vec:
+        min_t = float(min(tw, th))
+        rad_pct = float(np.clip(prepared.corner_radius_pct, 0.0, 50.0)) if prepared.rounded_corners else 0.0
+        r_t = min_t * (rad_pct / 100.0)
+        all_defs.append(
+            f'<clipPath id="svg-rounded-clip">'
+            f'<rect x="0" y="0" width="{tw}" height="{th}" rx="{r_t:.2f}" ry="{r_t:.2f}"/>'
+            f'</clipPath>\n'
+        )
+        if prepared.rounded_border and prepared.border_width_pct > 0.0:
+            bw_pct = float(np.clip(prepared.border_width_pct, 0.5, 25.0))
+            bw_t = max(scale, min_t * (bw_pct / 100.0))
+            br, bg_c, bb = (int(np.clip(c, 0, 255)) for c in prepared.border_color_rgb[:3])
+            border_hex = f"#{br:02X}{bg_c:02X}{bb:02X}"
+            round_border_xml = (
+                f'\n<rect id="svg-rounded-border" x="0" y="0" width="{tw}" height="{th}" '
+                f'rx="{r_t:.2f}" ry="{r_t:.2f}" fill="none" stroke="{border_hex}" '
+                f'stroke-width="{2.0 * bw_t:.2f}"/>'
+            )
+
+    if grad_overlays or all_defs or use_round_vec:
         root_end = svg_out.find(">", svg_out.find("<svg")) + 1
         close_pos = svg_out.rfind("</svg>")
         inner_body = svg_out[root_end:close_pos]
@@ -2012,6 +2136,8 @@ def convert_image_to_svg(
         content_block = inner_body + ("\n" + "\n".join(grad_overlays) if grad_overlays else "")
         if alpha_mask_xml is not None:
             content_block = f'\n<g mask="url(#svg-alpha-matte)">{content_block}\n</g>'
+        if use_round_vec:
+            content_block = f'\n<g clip-path="url(#svg-rounded-clip)">{content_block}{round_border_xml}\n</g>'
         svg_out = svg_out[:root_end] + defs_block + content_block + "\n</svg>\n"
 
     return svg_out
@@ -2735,18 +2861,21 @@ def render_brand_squircle_badge(size_px: int) -> Optional[Image.Image]:
     else:
         src_im = src_im.copy()
 
-    mask = _create_superellipse_mask(sz, sz, exponent=4.6, scale=4)
-    out = Image.new("RGBA", (sz, sz), (0, 0, 0, 0))
-    out.paste(src_im, (0, 0), mask)
+    if src_im.getpixel((0, 0))[3] == 0:
+        out = src_im
+    else:
+        mask = _create_superellipse_mask(sz, sz, exponent=4.6, scale=4)
+        out = Image.new("RGBA", (sz, sz), (0, 0, 0, 0))
+        out.paste(src_im, (0, 0), mask)
 
-    # Add subtle 2x supersampled inner highlight rim
-    ring_2x = _create_superellipse_mask(sz * 2, sz * 2, exponent=4.6, scale=2)
-    inner_2x = _create_superellipse_mask(sz * 2, max(4, sz * 2 - 4), exponent=4.6, scale=2)
-    rim_alpha = ImageChops.subtract(ring_2x, inner_2x).resize((sz, sz), Image.Resampling.LANCZOS)
-    rim_alpha = rim_alpha.point(lambda p: int(p * 0.55))
-    rim_layer = Image.new("RGBA", (sz, sz), (125, 211, 252, 0))
-    rim_layer.putalpha(rim_alpha)
-    out.alpha_composite(rim_layer)
+        # Add subtle 2x supersampled inner highlight rim
+        ring_2x = _create_superellipse_mask(sz * 2, sz * 2, exponent=4.6, scale=2)
+        inner_2x = _create_superellipse_mask(sz * 2, max(4, sz * 2 - 4), exponent=4.6, scale=2)
+        rim_alpha = ImageChops.subtract(ring_2x, inner_2x).resize((sz, sz), Image.Resampling.LANCZOS)
+        rim_alpha = rim_alpha.point(lambda p: int(p * 0.55))
+        rim_layer = Image.new("RGBA", (sz, sz), (125, 211, 252, 0))
+        rim_layer.putalpha(rim_alpha)
+        out.alpha_composite(rim_layer)
 
     if len(_BRAND_BADGE_CACHE) >= 16:
         _BRAND_BADGE_CACHE.clear()
@@ -3414,6 +3543,11 @@ class _EditorConfig:
     deepen_strength: int
     picked_transparencies: Tuple[TransparencyPick, ...]
     applied_square_crop: Optional[Tuple[int, int, int, int]]
+    rounded_corners: bool
+    corner_radius_pct: int
+    rounded_border: bool
+    border_width_pct: int
+    border_color_rgb: Tuple[int, int, int]
     preset_label: str
     curve_label: str
     true_gradients: bool
@@ -3525,6 +3659,9 @@ class IconConverterApp:
         self._var_clean_jpeg = tk.BooleanVar(value=True)
         self._var_auto_trim = tk.BooleanVar(value=False)
         self._var_deepen_diff = tk.BooleanVar(value=True)
+        self._var_rounded_corners = tk.BooleanVar(value=False)
+        self._var_rounded_border = tk.BooleanVar(value=False)
+        self._border_color_rgb: Tuple[int, int, int] = (76, 194, 255)
         self._var_true_gradients = tk.BooleanVar(value=True)
         self._var_clean_lines = tk.BooleanVar(value=True)
         self._var_small_sharpen = tk.BooleanVar(value=True)
@@ -4056,7 +4193,79 @@ class IconConverterApp:
             height=30,
             command=lambda _v: self._schedule_preview(),
         )
-        self.slider_pad.pack(fill="x")
+        self.slider_pad.pack(fill="x", pady=(0, 8))
+
+        mtk.Label(card.body, text="Rounded Corners & Border", font_size_delta=-1, bold=True).pack(anchor="w")
+        self.sw_rounded_corners = mtk.Switch(
+            card.body,
+            text="Rounded Corners (.svg & icons)",
+            variable=self._var_rounded_corners,
+            bootstyle="primary",
+            command=self._schedule_preview,
+        )
+        self.sw_rounded_corners.pack(anchor="w", pady=(3, 4))
+
+        mtk.Label(card.body, text="Corner Radius %", muted=True, font_size_delta=-1).pack(anchor="w")
+        self.slider_corner_radius = mtk.Slider(
+            card.body,
+            from_=2,
+            to=50,
+            value=18,
+            height=28,
+            command=lambda _v: self._schedule_preview(),
+        )
+        self.slider_corner_radius.pack(fill="x", pady=(0, 6))
+
+        self.sw_rounded_border = mtk.Switch(
+            card.body,
+            text="Add Border Around Frame",
+            variable=self._var_rounded_border,
+            bootstyle="info",
+            command=self._schedule_preview,
+        )
+        self.sw_rounded_border.pack(anchor="w", pady=(0, 4))
+
+        mtk.Label(card.body, text="Border Width %", muted=True, font_size_delta=-1).pack(anchor="w")
+        self.slider_border_width = mtk.Slider(
+            card.body,
+            from_=1,
+            to=15,
+            value=3,
+            height=28,
+            command=lambda _v: self._schedule_preview(),
+        )
+        self.slider_border_width.pack(fill="x", pady=(0, 6))
+
+        border_col_row = mtk.Frame(card.body)
+        border_col_row.pack(fill="x")
+        self.canvas_border_color = tk.Canvas(
+            border_col_row,
+            width=28,
+            height=28,
+            bd=0,
+            highlightthickness=0,
+            cursor="hand2",
+        )
+        self.canvas_border_color.pack(side="left", padx=(0, 8))
+        self.canvas_border_color.bind("<ButtonRelease-1>", lambda _e: self._choose_border_color())
+        self.lbl_border_color = mtk.Label(
+            border_col_row,
+            text="#4CC2FF",
+            muted=True,
+            font_size_delta=-1,
+        )
+        self.lbl_border_color.pack(side="left", padx=(0, 8))
+        self.btn_border_color = mtk.Button(
+            border_col_row,
+            text="Border Colour...",
+            icon="sliders",
+            bootstyle="info-outline",
+            height=30,
+            padx=12,
+            command=self._choose_border_color,
+        )
+        self.btn_border_color.pack(side="right", fill="x", expand=True)
+        self._redraw_border_color_swatch()
 
     def _build_svg_card(self, parent: tk.Misc) -> None:
         card = mtk.Card(parent, title="SVG Vectorizer", padding=12)
@@ -4308,8 +4517,65 @@ class IconConverterApp:
         self._redraw_compare_canvases()
         self._redraw_icns_strip()
         self._redraw_pick_swatches()
+        self._redraw_border_color_swatch()
         if self._worker_busy:
             self._render_and_push_busy_frame()
+
+    def _redraw_border_color_swatch(self) -> None:
+        cv = getattr(self, "canvas_border_color", None)
+        if cv is None or not cv.winfo_exists():
+            return
+        p = mtk.ThemeManager.instance().palette
+        cv.configure(bg=p.surface)
+        cv.delete("all")
+        r, g, b = self._border_color_rgb
+        hex_col = f"#{r:02X}{g:02X}{b:02X}"
+        cv.create_rectangle(2, 2, 25, 25, fill=hex_col, outline=p.border_strong, width=1, tags=("border_swatch",))
+        lbl = getattr(self, "lbl_border_color", None)
+        if lbl is not None and lbl.winfo_exists():
+            lbl.configure(text=hex_col)
+
+    def set_border_color(
+        self,
+        color: str | Tuple[int, int, int],
+        *,
+        enable_border: bool = True,
+        trigger_preview: bool = True,
+    ) -> Tuple[int, int, int]:
+        """Set the rounded/frame border colour from a `#RRGGBB` string or `(R, G, B)` tuple."""
+        if isinstance(color, str):
+            rgb = _parse_hex_rgb(color, self._border_color_rgb)
+        else:
+            rgb = (
+                int(np.clip(color[0], 0, 255)),
+                int(np.clip(color[1], 0, 255)),
+                int(np.clip(color[2], 0, 255)),
+            )
+        self._border_color_rgb = rgb
+        if enable_border and not self._var_rounded_border.get():
+            self._var_rounded_border.set(True)
+        self._redraw_border_color_swatch()
+        self._commit_undo_if_changed()
+        if trigger_preview and self._source_image is not None:
+            self.refresh_preview()
+        return rgb
+
+    def _choose_border_color(self) -> None:
+        r, g, b = self._border_color_rgb
+        init_hex = f"#{r:02X}{g:02X}{b:02X}"
+        chosen_rgb, chosen_hex = colorchooser.askcolor(
+            color=init_hex,
+            parent=self.root,
+            title="Select Border Colour",
+        )
+        if chosen_hex:
+            self.set_border_color(chosen_hex, enable_border=True, trigger_preview=True)
+        elif chosen_rgb is not None:
+            self.set_border_color(
+                (int(round(chosen_rgb[0])), int(round(chosen_rgb[1])), int(round(chosen_rgb[2]))),
+                enable_border=True,
+                trigger_preview=True,
+            )
 
     def _on_theme_selected(self, name: str) -> None:
         mtk.set_theme(name, root=self.root)
@@ -4346,6 +4612,11 @@ class IconConverterApp:
             deepen_strength=int(round(self.slider_deepen.get())),
             picked_transparencies=tuple(self._picked_transparencies),
             applied_square_crop=self._applied_square_crop,
+            rounded_corners=bool(self._var_rounded_corners.get()),
+            corner_radius_pct=int(round(self.slider_corner_radius.get())),
+            rounded_border=bool(self._var_rounded_border.get()),
+            border_width_pct=int(round(self.slider_border_width.get())),
+            border_color_rgb=tuple(self._border_color_rgb),
             preset_label=str(self.combo_preset.get()),
             curve_label=str(self.seg_curve.get()),
             true_gradients=bool(self._var_true_gradients.get()),
@@ -4422,6 +4693,8 @@ class IconConverterApp:
             self.seg_curve.set(cfg.curve_label, notify=False)
             self.slider_pad.set(cfg.padding_pct, notify=False)
             self.slider_deepen.set(cfg.deepen_strength, notify=False)
+            self.slider_corner_radius.set(cfg.corner_radius_pct, notify=False)
+            self.slider_border_width.set(cfg.border_width_pct, notify=False)
             self.slider_color_prec.set(cfg.color_precision, notify=False)
             self.slider_layer_diff.set(cfg.layer_difference, notify=False)
             self.slider_speckle.set(cfg.filter_speckle, notify=False)
@@ -4429,6 +4702,9 @@ class IconConverterApp:
             self._var_clean_jpeg.set(cfg.clean_jpeg)
             self._var_auto_trim.set(cfg.auto_trim)
             self._var_deepen_diff.set(cfg.deepen_diff)
+            self._var_rounded_corners.set(cfg.rounded_corners)
+            self._var_rounded_border.set(cfg.rounded_border)
+            self._border_color_rgb = tuple(cfg.border_color_rgb)
             self._var_true_gradients.set(cfg.true_gradients)
             self._var_clean_lines.set(cfg.clean_lines)
             self._var_small_sharpen.set(cfg.small_sharpen)
@@ -4443,6 +4719,7 @@ class IconConverterApp:
             self._svg_zoom_cache = None
 
             self._redraw_pick_swatches()
+            self._redraw_border_color_swatch()
             self._update_crop_status_ui()
             self._redraw_compare_canvases()
         finally:
@@ -4889,6 +5166,11 @@ class IconConverterApp:
             deepen_strength=float(round(self.slider_deepen.get())),
             picked_transparencies=tuple(self._picked_transparencies),
             square_crop=self._applied_square_crop,
+            rounded_corners=bool(self._var_rounded_corners.get()),
+            corner_radius_pct=float(round(self.slider_corner_radius.get())),
+            rounded_border=bool(self._var_rounded_border.get()),
+            border_width_pct=float(round(self.slider_border_width.get())),
+            border_color_rgb=tuple(self._border_color_rgb),
         )
 
         preset_label = self.combo_preset.get()
@@ -5957,6 +6239,11 @@ def _run_cli(args: argparse.Namespace) -> int:
         deepen_strength=float(args.deepen_strength),
         picked_transparencies=picks,
         square_crop=square_crop,
+        rounded_corners=bool(args.rounded_corners),
+        corner_radius_pct=float(args.corner_radius),
+        rounded_border=bool(args.border),
+        border_width_pct=float(args.border_width),
+        border_color_rgb=_parse_hex_rgb(args.border_color, (76, 194, 255)),
     )
 
     res = run_conversion(
@@ -6008,6 +6295,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--trim", action="store_true", help="Auto-trim outer uniform margins.")
     ap.add_argument("--padding", type=float, default=6.0, help="Trim margin padding percent (default: 6.0).")
     ap.add_argument("--crop-square", metavar="X,Y,SIZE", help="Crop a 1:1 square region before conversion (X,Y,SIZE or X0,Y0,X1,Y1).")
+    ap.add_argument("--rounded-corners", action="store_true", help="Apply rounded corners to .svg, .icns, and .ico outputs.")
+    ap.add_argument("--corner-radius", type=float, default=18.0, help="Rounded corner radius percent 0..50 (default: 18.0).")
+    ap.add_argument("--border", action="store_true", help="Draw a border around the rounded/frame boundary.")
+    ap.add_argument("--border-width", type=float, default=3.0, help="Border thickness percent 0.5..25 (default: 3.0).")
+    ap.add_argument("--border-color", default="#4CC2FF", help="Border colour hex #RRGGBB (default: #4CC2FF).")
     ap.add_argument("--no-deepen-diff", action="store_true", help="Disable Lab chroma separation deepening for transparency.")
     ap.add_argument("--deepen-strength", type=float, default=55.0, help="Color separation depth 0..100 (default: 55.0).")
     ap.add_argument("--pick", action="append", metavar="X,Y", help="Add smart transparency picker seed coordinate (repeatable).")

@@ -1396,8 +1396,8 @@ def test_version_1_0_0_ensure_icons_dir_and_github_inplace_updater(tmp_path: Pat
     import json
     from unittest.mock import MagicMock, patch
 
-    # 1. Version 1.0.1 & --version CLI flag
-    assert ic.__version__ == "1.0.1"
+    # 1. Version 1.0.3 & --version CLI flag
+    assert ic.__version__ == "1.0.3"
     ver_proc = subprocess.run(
         [sys.executable, str(REPO_ROOT / "icon_converter.py"), "--version"],
         cwd=str(REPO_ROOT),
@@ -1406,7 +1406,7 @@ def test_version_1_0_0_ensure_icons_dir_and_github_inplace_updater(tmp_path: Pat
         timeout=15,
     )
     assert ver_proc.returncode == 0
-    assert "Iconverter v1.0.1" in ver_proc.stdout
+    assert "Iconverter v1.0.3" in ver_proc.stdout
 
     # 2. First-run `icons` folder creation & brand asset seeding
     fresh_install_dir = tmp_path / "fresh_app_dir"
@@ -1519,4 +1519,162 @@ def test_version_1_0_0_ensure_icons_dir_and_github_inplace_updater(tmp_path: Pat
 
         ic.cleanup_old_executable_backup()
         assert not old_bak.exists()
+
+
+def test_rounded_corners_and_border_color_svg_icns_ico_and_gui(tmp_path: Path) -> None:
+    """Verify rounded corners with and without a custom-colored border across SVG, ICNS, ICO, GUI, and Undo."""
+    src_path = tmp_path / "full_bleed_square.png"
+    src = Image.new("RGBA", (200, 200), (24, 96, 210, 255))
+    draw = ImageDraw.Draw(src)
+    draw.ellipse([48, 48, 152, 152], fill=(250, 204, 21, 255))
+    src.save(src_path)
+
+    # 1. Rounded corners WITHOUT border (SVG, ICNS, ICO)
+    out_no_border = tmp_path / "no_border"
+    res_nb = ic.run_conversion(
+        src_path,
+        prepare_opts=ic.PrepareOptions(
+            bg_mode="faithful",
+            rounded_corners=True,
+            corner_radius_pct=22.0,
+            rounded_border=False,
+        ),
+        svg_opts=ic.SVG_PRESETS["compact"][1],
+        out_dir=out_no_border,
+        stem="sample_nb",
+        write_svg=True,
+        write_icns=True,
+        write_ico=True,
+    )
+    assert '<clipPath id="svg-rounded-clip">' in res_nb.svg_text
+    assert 'id="svg-rounded-border"' not in res_nb.svg_text
+
+    icns_im_nb = next(s.image for s in res_nb.icns_inspection.slots if s.pixel_size == 1024 and s.image is not None)
+    for im_check in (
+        res_nb.prepared.image,
+        res_nb.svg_rendered,
+        res_nb.prepared.square_icon,
+        icns_im_nb,
+    ):
+        cw, ch = im_check.size
+        for cx, cy in ((0, 0), (cw - 1, 0), (0, ch - 1), (cw - 1, ch - 1)):
+            assert im_check.getpixel((cx, cy))[3] == 0
+        # Center remains opaque yellow circle
+        center_px = im_check.getpixel((cw // 2, ch // 2))
+        assert center_px[3] > 240
+        assert center_px[0] > 200 and center_px[1] > 160
+
+    ico_path_nb = out_no_border / "sample_nb.ico"
+    assert ico_path_nb.is_file()
+    with Image.open(ico_path_nb) as ico_im:
+        ico_rgba = ico_im.convert("RGBA")
+        iw, ih = ico_rgba.size
+        assert ico_rgba.getpixel((0, 0))[3] == 0
+        assert ico_rgba.getpixel((iw - 1, ih - 1))[3] == 0
+
+    # 2. Rounded corners WITH custom border color (#FF3078 -> RGB 255, 48, 120)
+    out_with_border = tmp_path / "with_border"
+    border_rgb = (255, 48, 120)
+    res_wb = ic.run_conversion(
+        src_path,
+        prepare_opts=ic.PrepareOptions(
+            bg_mode="faithful",
+            rounded_corners=True,
+            corner_radius_pct=20.0,
+            rounded_border=True,
+            border_width_pct=6.0,
+            border_color_rgb=border_rgb,
+        ),
+        svg_opts=ic.SVG_PRESETS["compact"][1],
+        out_dir=out_with_border,
+        stem="sample_wb",
+        write_svg=True,
+        write_icns=True,
+        write_ico=True,
+    )
+    assert '<clipPath id="svg-rounded-clip">' in res_wb.svg_text
+    assert 'id="svg-rounded-border"' in res_wb.svg_text
+    assert 'stroke="#FF3078"' in res_wb.svg_text
+
+    for im_check in (res_wb.prepared.image, res_wb.svg_rendered, res_wb.prepared.square_icon):
+        cw, ch = im_check.size
+        # Outer sharp corner is still clipped transparent
+        assert im_check.getpixel((0, 0))[3] == 0
+        # Top-edge midpoint inside the 6% border band has the chosen border color
+        sample_y = max(2, int(round(ch * 0.03)))
+        top_border_px = im_check.getpixel((cw // 2, sample_y))
+        assert top_border_px[3] > 240
+        assert abs(top_border_px[0] - border_rgb[0]) <= 18
+        assert abs(top_border_px[1] - border_rgb[1]) <= 18
+        assert abs(top_border_px[2] - border_rgb[2]) <= 18
+
+    # 3. GUI controls, custom border color swatch, and 5-level Undo integration
+    script = f"""
+import time
+from pathlib import Path
+import icon_converter as ic
+
+app = ic.IconConverterApp(initial_image=Path({str(src_path)!r}), themename="fluent_dark")
+try:
+    app.root.update()
+
+    def _wait_idle():
+        for _ in range(250):
+            app.drain_ui_queue()
+            app.root.update()
+            if not app._worker_busy and app._last_result is not None:
+                return
+            time.sleep(0.02)
+        raise AssertionError("Timed out waiting for background worker.")
+
+    _wait_idle()
+    assert app._var_rounded_corners.get() is False
+    assert app._var_rounded_border.get() is False
+    assert 'id="svg-rounded-clip"' not in app._last_result.svg_text
+
+    # Enable rounded corners (without border)
+    app._var_rounded_corners.set(True)
+    app.slider_corner_radius.set(24, notify=False)
+    app.refresh_preview()
+    _wait_idle()
+    assert app.undo_depth() == 1
+    assert '<clipPath id="svg-rounded-clip">' in app._last_result.svg_text
+    assert 'id="svg-rounded-border"' not in app._last_result.svg_text
+    assert app._last_result.svg_rendered.getpixel((0, 0))[3] == 0
+
+    # Enable border & pick custom green border color (#22C55E)
+    app._var_rounded_border.set(True)
+    app.slider_border_width.set(6.0, notify=False)
+    app.set_border_color("#22C55E", trigger_preview=True)
+    _wait_idle()
+    assert app.undo_depth() == 2
+    assert app._border_color_rgb == (34, 197, 94)
+    assert app.lbl_border_color.cget("text") == "#22C55E"
+    assert 'id="svg-rounded-border"' in app._last_result.svg_text
+    assert 'stroke="#22C55E"' in app._last_result.svg_text
+
+    # Undo 1 -> restores rounded corners without border and default border color
+    assert app.undo() is True
+    _wait_idle()
+    assert app._var_rounded_corners.get() is True
+    assert app._var_rounded_border.get() is False
+    assert 'id="svg-rounded-border"' not in app._last_result.svg_text
+
+    # Undo 2 -> restores unrounded original state
+    assert app.undo() is True
+    _wait_idle()
+    assert app._var_rounded_corners.get() is False
+    assert 'id="svg-rounded-clip"' not in app._last_result.svg_text
+finally:
+    app.root.destroy()
+"""
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 0, f"STDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
+
 
