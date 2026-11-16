@@ -2295,13 +2295,80 @@ def save_icns(
     return data
 
 
-def save_ico(square_master: Image.Image, out_path: str | Path) -> None:
-    """Optionally save a crisp multi-size Windows `.ico` (16..256)."""
-    ico_sizes = [16, 24, 32, 48, 64, 128, 256]
-    mips = render_icon_mipmaps(square_master, ico_sizes, small_icon_sharpen=True)
-    largest = mips[256]
-    extras = [mips[s] for s in ico_sizes if s != 256]
-    largest.save(out_path, format="ICO", append_images=extras, sizes=[(s, s) for s in ico_sizes])
+ICO_MIPMAP_SIZES: Tuple[int, ...] = (256, 128, 64, 48, 40, 32, 24, 20, 16)
+
+
+def _encode_ico_dib_chunk(im: Image.Image) -> bytes:
+    """Encode an RGBA image as a 32-bit BGRA BITMAPINFOHEADER + 1-bit AND mask DIB for Windows `.ico`."""
+    rgba = np.asarray(im.convert("RGBA"), dtype=np.uint8)
+    h, w, _ = rgba.shape
+    flipped = rgba[::-1]
+    bgra = np.ascontiguousarray(flipped[..., [2, 1, 0, 3]])
+    xor_bytes = bgra.tobytes()
+
+    row_bytes = ((w + 31) // 32) * 4
+    alpha_trans = (flipped[..., 3] < 128).astype(np.uint8)
+    packed = np.packbits(alpha_trans, axis=1, bitorder="big")
+    if packed.shape[1] < row_bytes:
+        pad = np.zeros((h, row_bytes - packed.shape[1]), dtype=np.uint8)
+        packed = np.hstack([packed, pad])
+    and_bytes = np.ascontiguousarray(packed[:, :row_bytes]).tobytes()
+    bih = struct.pack(
+        "<IIIHHIIIIII",
+        40,
+        w,
+        h * 2,
+        1,
+        32,
+        0,
+        len(xor_bytes) + len(and_bytes),
+        0,
+        0,
+        0,
+        0,
+    )
+    return bih + xor_bytes + and_bytes
+
+
+def build_ico_bytes(
+    square_master: Image.Image,
+    *,
+    sizes: Sequence[int] = ICO_MIPMAP_SIZES,
+    small_icon_sharpen: bool = True,
+) -> bytes:
+    """Build a multi-resolution Windows `.ico` with descending entries (256 first) and High-DPI mipmaps."""
+    ordered = sorted({int(s) for s in sizes if 16 <= int(s) <= 256}, reverse=True)
+    if not ordered:
+        ordered = list(ICO_MIPMAP_SIZES)
+    mips = render_icon_mipmaps(square_master, ordered, small_icon_sharpen=small_icon_sharpen)
+
+    payloads: List[Tuple[int, bytes]] = []
+    for sz in ordered:
+        im_s = mips[sz]
+        if sz >= 256:
+            buf = io.BytesIO()
+            im_s.save(buf, format="PNG", optimize=True)
+            payloads.append((sz, buf.getvalue()))
+        else:
+            payloads.append((sz, _encode_ico_dib_chunk(im_s)))
+
+    header = struct.pack("<HHH", 0, 1, len(payloads))
+    offset = 6 + 16 * len(payloads)
+    dir_entries: List[bytes] = []
+    data_blobs: List[bytes] = []
+    for sz, blob in payloads:
+        wb = 0 if sz >= 256 else sz
+        dir_entries.append(struct.pack("<BBBBHHII", wb, wb, 0, 0, 1, 32, len(blob), offset))
+        data_blobs.append(blob)
+        offset += len(blob)
+    return header + b"".join(dir_entries) + b"".join(data_blobs)
+
+
+def save_ico(square_master: Image.Image, out_path: str | Path) -> bytes:
+    """Save a crisp multi-size Windows `.ico` (256..16 descending with 40x40 & 20x20 High-DPI slots)."""
+    data = build_ico_bytes(square_master, sizes=ICO_MIPMAP_SIZES, small_icon_sharpen=True)
+    Path(out_path).write_bytes(data)
+    return data
 
 
 def inspect_icns(source: bytes | str | Path) -> IcnsInspection:
@@ -2529,43 +2596,70 @@ _APP_BRAND_BUNDLE_CACHE: Optional[Tuple[Optional[Image.Image], Dict[int, Image.I
 _BRAND_BADGE_CACHE: Dict[int, Image.Image] = {}
 
 
+def _ico_has_descending_256_first(ico_path: Path) -> bool:
+    """Return True if `ico_path` has a valid ICO header with 256x256 at entry 0 and a 40x40 High-DPI slot."""
+    try:
+        if not ico_path.is_file():
+            return False
+        raw = ico_path.read_bytes()
+        if len(raw) < 22:
+            return False
+        res, typ, count = struct.unpack("<HHH", raw[:6])
+        if res != 0 or typ != 1 or count < 7 or len(raw) < 6 + 16 * count:
+            return False
+        w0 = raw[6]
+        widths = {(256 if raw[6 + i * 16] == 0 else int(raw[6 + i * 16])) for i in range(count)}
+        return w0 == 0 and 40 in widths and 256 in widths
+    except OSError:
+        return False
+
+
 def resolve_app_brand_paths() -> Tuple[Optional[Path], Optional[Path], Path]:
     """Locate `Icon_generator.icns`, `Icon_generator.svg`, and `Icon_generator.ico` in `icons/`."""
     ext_icons = ensure_icons_dir()
-    roots: List[Path] = [ext_icons]
+    roots: List[Path] = []
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
         roots.append(Path(meipass) / "icons")
+    roots.append(ext_icons)
     here_icons = Path(__file__).resolve().parent / "icons"
     if here_icons not in roots:
         roots.append(here_icons)
 
     icns_path: Optional[Path] = None
     svg_path: Optional[Path] = None
+    ico_found: Optional[Path] = None
     for icons_dir in roots:
         if not icons_dir.is_dir():
             continue
-        for cand_icns in (icons_dir / "Icon_generator.icns", icons_dir / "icon_generator.icns"):
-            if cand_icns.is_file():
-                icns_path = cand_icns
-                break
-        for cand_svg in (icons_dir / "Icon_generator.svg", icons_dir / "icon_generator.svg"):
-            if cand_svg.is_file():
-                svg_path = cand_svg
-                break
-        if icns_path is not None or svg_path is not None:
-            return icns_path, svg_path, ext_icons / "Icon_generator.ico"
-    return None, None, ext_icons / "Icon_generator.ico"
+        if icns_path is None:
+            for cand_icns in (icons_dir / "Icon_generator.icns", icons_dir / "icon_generator.icns"):
+                if cand_icns.is_file():
+                    icns_path = cand_icns
+                    break
+        if svg_path is None:
+            for cand_svg in (icons_dir / "Icon_generator.svg", icons_dir / "icon_generator.svg"):
+                if cand_svg.is_file():
+                    svg_path = cand_svg
+                    break
+        if ico_found is None:
+            for cand_ico in (icons_dir / "Icon_generator.ico", icons_dir / "icon_generator.ico"):
+                if cand_ico.is_file():
+                    ico_found = cand_ico
+                    break
+    target_ico = ico_found if (ico_found is not None and _ico_has_descending_256_first(ico_found)) else (ext_icons / "Icon_generator.ico")
+    return icns_path, svg_path, target_ico
 
 
 def load_app_brand_bundle() -> Tuple[Optional[Image.Image], Dict[int, Image.Image], Optional[Path]]:
-    """Load and cache multi-resolution app icons from `Icon_generator.icns` / `Icon_generator.svg`."""
+    """Load and cache multi-resolution app icons from `Icon_generator.icns` / `Icon_generator.svg` / `Icon_generator.ico`."""
     global _APP_BRAND_BUNDLE_CACHE
     if _APP_BRAND_BUNDLE_CACHE is not None:
         master_c, by_px_c, ico_c = _APP_BRAND_BUNDLE_CACHE
-        if ico_c is None or ico_c.is_file():
+        if ico_c is not None and _ico_has_descending_256_first(ico_c):
             return _APP_BRAND_BUNDLE_CACHE
 
+    ext_icons = ensure_icons_dir()
     icns_path, svg_path, ico_path = resolve_app_brand_paths()
     master_im: Optional[Image.Image] = None
     by_px: Dict[int, Image.Image] = {}
@@ -2586,23 +2680,42 @@ def load_app_brand_bundle() -> Tuple[Optional[Image.Image], Dict[int, Image.Imag
     if master_im is None and svg_path is not None and svg_path.is_file():
         try:
             svg_text = svg_path.read_text(encoding="utf-8", errors="replace")
-            master_im = render_svg_to_pil(svg_text, width=512, height=512)
+            master_im = render_svg_to_pil(svg_text, width=1024, height=1024)
+            by_px[1024] = master_im
+        except Exception:
+            pass
+
+    if master_im is None and ico_path.is_file():
+        try:
+            with Image.open(ico_path) as im_ico:
+                im_ico.load()
+                master_im = im_ico.convert("RGBA")
         except Exception:
             pass
 
     if master_im is not None:
-        for sz in (16, 24, 32, 48, 64, 128, 256, 512):
+        if 1024 not in by_px:
+            by_px[1024] = master_im if master_im.size == (1024, 1024) else master_im.resize((1024, 1024), Image.Resampling.LANCZOS)
+        mips = render_icon_mipmaps(by_px[1024], (16, 20, 24, 32, 40, 48, 64, 128, 256, 512), small_icon_sharpen=True)
+        for sz, mip_im in mips.items():
             if sz not in by_px:
-                by_px[sz] = master_im.resize((sz, sz), Image.Resampling.LANCZOS)
-        if not ico_path.is_file():
+                by_px[sz] = mip_im
+        if not _ico_has_descending_256_first(ico_path):
             try:
+                ico_path = ext_icons / "Icon_generator.ico"
                 ico_path.parent.mkdir(parents=True, exist_ok=True)
-                save_ico(master_im, ico_path)
+                save_ico(by_px[1024], ico_path)
+            except Exception:
+                pass
+        ext_icns = ext_icons / "Icon_generator.icns"
+        if (icns_path is None or not icns_path.is_file()) and not ext_icns.is_file():
+            try:
+                save_icns(by_px[1024], ext_icns)
             except Exception:
                 pass
 
     final_ico = ico_path if ico_path.is_file() else None
-    _APP_BRAND_BUNDLE_CACHE = (master_im, by_px, final_ico)
+    _APP_BRAND_BUNDLE_CACHE = (by_px.get(1024, master_im), by_px, final_ico)
     return _APP_BRAND_BUNDLE_CACHE
 
 
@@ -3333,7 +3446,9 @@ class IconConverterApp:
     ) -> None:
         if sys.platform == "win32":
             try:
-                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Iconverter.VectorStudio.App.1")
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                    f"Iconverter.VectorStudio.App.{__version__}"
+                )
             except Exception:
                 pass
 
@@ -3448,13 +3563,8 @@ class IconConverterApp:
     # ------------------------------------------------------------------ UI Layout
 
     def _apply_window_branding(self) -> None:
-        """Apply `Icon_generator.icns` / `Icon_generator.svg` icons to window titlebar and taskbar."""
+        """Apply `Icon_generator.ico` natively on Windows (without `wm iconphoto` 16x16 overwrite)."""
         _master, by_px, ico_path = load_app_brand_bundle()
-        if sys.platform == "win32" and ico_path is not None and ico_path.is_file():
-            try:
-                self.root.iconbitmap(default=str(ico_path))
-            except Exception:
-                pass
         photos: List[ImageTk.PhotoImage] = []
         for sz in (256, 128, 64, 48, 32, 16):
             im_sz = by_px.get(sz)
@@ -3463,8 +3573,58 @@ class IconConverterApp:
                     photos.append(ImageTk.PhotoImage(im_sz, master=self.root))
                 except Exception:
                     continue
+        self._app_icon_photos = photos
+
+        if sys.platform == "win32" and ico_path is not None and ico_path.is_file():
+            try:
+                self.root.iconbitmap(default=str(ico_path))
+                self.root.tk.call("wm", "iconbitmap", self.root._w, str(ico_path))
+            except Exception:
+                pass
+            try:
+                from ctypes import wintypes
+
+                self.root.update_idletasks()
+                hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id()) or self.root.winfo_id()
+                LoadImageW = ctypes.windll.user32.LoadImageW
+                LoadImageW.argtypes = [
+                    wintypes.HINSTANCE,
+                    wintypes.LPCWSTR,
+                    wintypes.UINT,
+                    ctypes.c_int,
+                    ctypes.c_int,
+                    wintypes.UINT,
+                ]
+                LoadImageW.restype = wintypes.HANDLE
+                SendMessageW = ctypes.windll.user32.SendMessageW
+                SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+                SetClassLongPtrW = getattr(
+                    ctypes.windll.user32,
+                    "SetClassLongPtrW",
+                    ctypes.windll.user32.SetClassLongW,
+                )
+                SetClassLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_size_t]
+                SetClassLongPtrW.restype = ctypes.c_size_t
+
+                cx_big = int(ctypes.windll.user32.GetSystemMetrics(11)) or 48
+                cy_big = int(ctypes.windll.user32.GetSystemMetrics(12)) or 48
+                cx_sm = int(ctypes.windll.user32.GetSystemMetrics(49)) or 24
+                cy_sm = int(ctypes.windll.user32.GetSystemMetrics(50)) or 24
+
+                h_big = LoadImageW(None, str(ico_path), 1, cx_big, cy_big, 0x0010)
+                h_sm = LoadImageW(None, str(ico_path), 1, cx_sm, cy_sm, 0x0010)
+                self._win32_hicons = (h_big, h_sm)
+                if h_big:
+                    SendMessageW(hwnd, 0x0080, 1, ctypes.cast(h_big, ctypes.c_void_p).value or 0)
+                    SetClassLongPtrW(hwnd, -14, ctypes.cast(h_big, ctypes.c_void_p).value or 0)
+                if h_sm:
+                    SendMessageW(hwnd, 0x0080, 0, ctypes.cast(h_sm, ctypes.c_void_p).value or 0)
+                    SetClassLongPtrW(hwnd, -34, ctypes.cast(h_sm, ctypes.c_void_p).value or 0)
+            except Exception:
+                pass
+            return
+
         if photos:
-            self._app_icon_photos = photos
             try:
                 self.root.iconphoto(True, *photos)
             except Exception:

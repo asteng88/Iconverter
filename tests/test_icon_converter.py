@@ -1260,6 +1260,7 @@ def test_app_brand_icons_and_svg_loaded() -> None:
         assert by_px[sz].size == (sz, sz)
     assert resolved_ico is not None and resolved_ico.is_file()
     assert resolved_ico == ico_p
+    assert ic._ico_has_descending_256_first(resolved_ico) is True
 
     b42 = ic.render_brand_squircle_badge(42)
     b112 = ic.render_brand_squircle_badge(112)
@@ -1283,6 +1284,7 @@ try:
     app.root.geometry("1120x740")
     app.root.update()
     assert len(app._app_icon_photos) == 6
+    assert hasattr(app, "_win32_hicons") and all(app._win32_hicons)
     assert app._header_logo_photo is not None
     assert len(app.canvas_app_logo.find_withtag("header_logo")) == 1
     assert len(app.canvas_orig.find_withtag("brand_welcome")) >= 2
