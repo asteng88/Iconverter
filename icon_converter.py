@@ -220,7 +220,7 @@ def _should_offload_native_gil() -> bool:
     return mtk.ModernSubprocessWorker.should_offload()
 
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 GITHUB_OWNER = os.environ.get("ICONVERTER_GITHUB_OWNER", "asteng88")
 GITHUB_REPO = os.environ.get("ICONVERTER_GITHUB_REPO", "Iconverter")
 GITHUB_RELEASES_PAGE = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases"
@@ -3345,6 +3345,13 @@ class IconConverterApp:
             geometry="1400x880",
         )
         self.root.minsize(1120, 740)
+        try:
+            self.root.state("zoomed")
+        except tk.TclError:
+            try:
+                self.root.attributes("-zoomed", True)
+            except tk.TclError:
+                pass
         self._app_icon_photos: List[ImageTk.PhotoImage] = []
         self._header_logo_photo: Optional[ImageTk.PhotoImage] = None
         self._apply_window_branding()
@@ -3399,7 +3406,7 @@ class IconConverterApp:
         self._var_stem = tk.StringVar(value="icon")
         self._var_write_svg = tk.BooleanVar(value=True)
         self._var_write_icns = tk.BooleanVar(value=True)
-        self._var_write_ico = tk.BooleanVar(value=False)
+        self._var_write_ico = tk.BooleanVar(value=True)
 
         self._var_clean_jpeg = tk.BooleanVar(value=True)
         self._var_auto_trim = tk.BooleanVar(value=False)
@@ -3498,7 +3505,7 @@ class IconConverterApp:
         self.badge_version.pack(side="left")
         mtk.Label(
             title_col,
-            text="Faithful Picture -> Scalable Vector (.SVG) + Complete 12-Slot Apple (.ICNS)",
+            text="Faithful Picture -> Scalable Vector (.SVG), Windows (.ICO) & Complete 12-Slot Apple (.ICNS)",
             muted=True,
             font_size_delta=-1,
         ).pack(anchor="w")
@@ -3571,7 +3578,7 @@ class IconConverterApp:
 
         self.btn_convert = mtk.Button(
             footer_card.body,
-            text="Convert & Save (.svg + .icns)",
+            text="Convert & Save (svg + icons)",
             icon="download",
             bootstyle="success",
             height=40,

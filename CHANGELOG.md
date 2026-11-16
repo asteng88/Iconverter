@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [1.0.1] - 2026-11-16
+
+### Changed
+- **Zoomed-to-Screen Startup**: Application window now starts maximized/zoomed (`state("zoomed")`) to fit the screen on launch.
+- **Default `.ICO` Export Enabled**: The Windows `.ico` output checkbox is now enabled by default on launch alongside `.svg` and `.icns`.
+- **Updated Studio Header & Convert Action Labels**: Updated header subtitle (`Scalable Vector (.SVG), Windows (.ICO) & Complete 12-Slot Apple (.ICNS)`) and action button (`Convert & Save (svg + icons)`).
+
+---
+
 ## [1.0.0] - 2026-11-16
 
 ### Added

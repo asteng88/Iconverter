@@ -1,6 +1,6 @@
 # Iconverter — Icon & Vector Studio
 
-[![Release](https://img.shields.io/badge/release-v1.0.0-4cc2ff?style=flat-square)](https://github.com/asteng88/Iconverter/releases/tag/v1.0.0)
+[![Release](https://img.shields.io/badge/release-v1.0.1-4cc2ff?style=flat-square)](https://github.com/asteng88/Iconverter/releases/tag/v1.0.1)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776ab?style=flat-square)](https://www.python.org/)
 [![UI Toolkit](https://img.shields.io/badge/UI-ModernTtk-10b981?style=flat-square)](./ModernTtk)
 [![License: MIT](https://img.shields.io/badge/License-MIT-f59e0b?style=flat-square)](./LICENSE)
@@ -102,7 +102,7 @@ Every exported `.icns` file begins with an `icns` magic header and a `TOC ` (Tab
 ## 5. Download & Installation
 
 ### Option A: Standalone Windows Executable (No Python Required)
-1. Download **[`Iconverter.exe`](https://github.com/asteng88/Iconverter/releases/latest/download/Iconverter.exe)** (or **[`Iconverter_v1.0.0.zip`](https://github.com/asteng88/Iconverter/releases/latest/download/Iconverter_v1.0.0.zip)**) from the [Latest GitHub Release](https://github.com/asteng88/Iconverter/releases/latest).
+1. Download **[`Iconverter.exe`](https://github.com/asteng88/Iconverter/releases/latest/download/Iconverter.exe)** (or **[`Iconverter_v1.0.1.zip`](https://github.com/asteng88/Iconverter/releases/latest/download/Iconverter_v1.0.1.zip)**) from the [Latest GitHub Release](https://github.com/asteng88/Iconverter/releases/latest).
 2. Run `Iconverter.exe`. On first run, it automatically creates an `icons/` folder next to the executable and seeds it with the studio icons.
 
 ### Option B: Run from Source (`uv` or `pip`)

@@ -1274,6 +1274,12 @@ import icon_converter as ic
 
 app = ic.IconConverterApp(themename="fluent_dark")
 try:
+    app.root.update()
+    assert app.root.state() == "zoomed"
+    assert app._var_write_svg.get() is True
+    assert app._var_write_icns.get() is True
+    assert app._var_write_ico.get() is True
+    app.root.state("normal")
     app.root.geometry("1120x740")
     app.root.update()
     assert len(app._app_icon_photos) == 6
@@ -1388,8 +1394,8 @@ def test_version_1_0_0_ensure_icons_dir_and_github_inplace_updater(tmp_path: Pat
     import json
     from unittest.mock import MagicMock, patch
 
-    # 1. Version 1.0.0 & --version CLI flag
-    assert ic.__version__ == "1.0.0"
+    # 1. Version 1.0.1 & --version CLI flag
+    assert ic.__version__ == "1.0.1"
     ver_proc = subprocess.run(
         [sys.executable, str(REPO_ROOT / "icon_converter.py"), "--version"],
         cwd=str(REPO_ROOT),
@@ -1398,7 +1404,7 @@ def test_version_1_0_0_ensure_icons_dir_and_github_inplace_updater(tmp_path: Pat
         timeout=15,
     )
     assert ver_proc.returncode == 0
-    assert "Iconverter v1.0.0" in ver_proc.stdout
+    assert "Iconverter v1.0.1" in ver_proc.stdout
 
     # 2. First-run `icons` folder creation & brand asset seeding
     fresh_install_dir = tmp_path / "fresh_app_dir"
