@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "iconverter"
+version = "1.0.0"
+description = "Icon & Vector Studio — Faithful Picture to .SVG and Complete 12-Slot Apple .ICNS Converter built with ModernTtk."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "modernttk",
+    "numpy>=2.0.0",
+    "opencv-python-headless>=4.10.0",
+    "pillow>=10.3.0",
+    "resvg-py>=0.5.0",
+    "vtracer>=1.0.0a4",
+]
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.10.0",
+    "pytest>=8.0.0",
+]
+
+[project.scripts]
+iconverter-cli = "icon_converter:main"
+
+[project.gui-scripts]
+iconverter = "icon_converter:main"
+
+[tool.setuptools]
+py-modules = ["icon_converter"]
+
+[tool.uv.sources]
+modernttk = { path = "./ModernTtk", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
